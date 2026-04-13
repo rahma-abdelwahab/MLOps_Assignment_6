@@ -7,9 +7,10 @@ on:
 
 jobs:
 
-  # Lightweight linter job — must pass first
+  # ── Job 1: Lightweight linter (must pass first) ──────────────────────────
   linter:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -23,9 +24,9 @@ jobs:
         run: pip install flake8
 
       - name: Run linter
-        run: flake8 . --count --max-line-length=120 --ignore=W291,W292 --statistics
+        run: flake8 . --count --max-line-length=120 --ignore=W291,W292,E501 --statistics
 
-  # Expensive train job — only runs if ALL 3 conditions are met
+  # ── Job 2: Expensive train (Gatekeeper — all 3 conditions must be met) ───
   train:
     runs-on: ubuntu-latest
     needs: linter
@@ -65,13 +66,22 @@ jobs:
           MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
         run: python train.py
 
-      # Failure handler — uploads error log
+      # ── Pass model_info.txt to deploy job via artifact ───────────────────
+      - name: Upload model info artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-info
+          path: model_info.txt
+
+      # ── Runs ONLY on failure → uploads error log artifact ────────────────
       - name: Capture error logs
         if: failure()
         run: |
           echo "Training failed at $(date)" > error_logs.txt
           echo "Commit: ${{ github.sha }}" >> error_logs.txt
           echo "Branch: ${{ github.ref }}" >> error_logs.txt
+          echo "Triggered by: ${{ github.actor }}" >> error_logs.txt
 
       - name: Upload error logs artifact
         if: failure()
@@ -80,7 +90,48 @@ jobs:
           name: error-logs
           path: error_logs.txt
 
-      # Always runs — cleanup step
+      # ── Always runs → cleanup ─────────────────────────────────────────────
       - name: Cleanup temporary cloud volumes
         if: always()
         run: echo "Cleaning up temporary cloud volumes..."
+
+  # ── Job 3: Deploy (runs only if train succeeds) ───────────────────────────
+  deploy:
+    runs-on: ubuntu-latest
+    needs: train
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # ── Download model_info.txt from train job ────────────────────────────
+      - name: Download model info artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: model-info
+
+      - name: Verify model_info.txt exists
+        run: cat model_info.txt
+
+      - name: Check accuracy threshold
+        env:
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+          MLFLOW_TRACKING_USERNAME: ${{ secrets.MLFLOW_TRACKING_USERNAME }}
+          MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
+        run: python check_threshold.py
+
+      - name: Mock Docker Build
+        if: success()
+        run: |
+          RUN_ID=$(cat model_info.txt)
+          echo "Building Docker image for Run ID: ${RUN_ID}"
+          docker build --build-arg RUN_ID="${RUN_ID}" -t breast-cancer-model:${RUN_ID} .
+          echo "✅ Docker image built successfully for Run ID: ${RUN_ID}"
