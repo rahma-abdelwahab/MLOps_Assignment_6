@@ -1,0 +1,86 @@
+name: Gatekeeper ML Pipeline
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+
+  # Lightweight linter job — must pass first
+  linter:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install flake8
+        run: pip install flake8
+
+      - name: Run linter
+        run: flake8 . --count --max-line-length=120 --statistics
+
+  # Expensive train job — only runs if ALL 3 conditions are met
+  train:
+    runs-on: ubuntu-latest
+    needs: linter
+    if: |
+      needs.linter.result == 'success' &&
+      github.ref == 'refs/heads/main' &&
+      contains(github.event.head_commit.message, '[run-train]')
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Pull data with DVC
+        env:
+          DAGSHUB_USERNAME: ${{ secrets.DAGSHUB_USERNAME }}
+          DAGSHUB_TOKEN: ${{ secrets.DAGSHUB_TOKEN }}
+        run: |
+          dvc remote add -f myremote https://dagshub.com/${{ secrets.DAGSHUB_USERNAME }}/MLOps_Assignment_6.dvc
+          dvc remote modify myremote auth basic
+          dvc remote modify myremote user ${{ secrets.DAGSHUB_USERNAME }}
+          dvc remote modify myremote password ${{ secrets.DAGSHUB_TOKEN }}
+          dvc remote default myremote
+          dvc pull --force -v
+
+      - name: Train model
+        env:
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+          MLFLOW_TRACKING_USERNAME: ${{ secrets.MLFLOW_TRACKING_USERNAME }}
+          MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
+        run: python train.py
+
+      # Failure handler — uploads error log
+      - name: Capture error logs
+        if: failure()
+        run: |
+          echo "Training failed at $(date)" > error_logs.txt
+          echo "Commit: ${{ github.sha }}" >> error_logs.txt
+          echo "Branch: ${{ github.ref }}" >> error_logs.txt
+
+      - name: Upload error logs artifact
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: error-logs
+          path: error_logs.txt
+
+      # Always runs — cleanup step
+      - name: Cleanup temporary cloud volumes
+        if: always()
+        run: echo "Cleaning up temporary cloud volumes..."

@@ -1,0 +1,7 @@
+[core]
+    remote = myremote
+['remote "myremote"']
+    url = https://dagshub.com/rahma-abdelwahab/MLOps_Assignment_6.dvc
+    auth = basic
+    user = rahma-abdelwahab
+    password = 763e8804136efb9e90f1da8f323b818a579e69b4
