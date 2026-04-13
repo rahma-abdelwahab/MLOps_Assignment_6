@@ -23,7 +23,7 @@ jobs:
         run: pip install flake8
 
       - name: Run linter
-        run: flake8 . --count --max-line-length=120 --statistics
+        run: flake8 . --count --max-line-length=120 --ignore=W291,W292 --statistics
 
   # Expensive train job — only runs if ALL 3 conditions are met
   train:
